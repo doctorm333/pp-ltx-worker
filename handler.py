@@ -1,13 +1,14 @@
-import base64, io, traceback, torch, runpod
+import base64, io, os, traceback, torch, runpod
 from diffusers import FluxPipeline
 
 MODEL_ID = "black-forest-labs/FLUX.1-schnell"
+HF_TOKEN = os.environ.get("HF_TOKEN")
 PIPE = None
 
 def load():
     global PIPE
     if PIPE is None:
-        PIPE = FluxPipeline.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16)
+        PIPE = FluxPipeline.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, token=HF_TOKEN)
         PIPE.enable_model_cpu_offload()
         try:
             PIPE.vae.enable_tiling()
