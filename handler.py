@@ -1,9 +1,10 @@
-import base64, io, os, traceback, torch, runpod
+import base64, io, os, traceback, urllib.request, torch, runpod
 from diffusers import FluxPipeline
 from huggingface_hub import snapshot_download
 
 MODEL_ID = "black-forest-labs/FLUX.1-schnell"
 HF_TOKEN = os.environ.get("HF_TOKEN")
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
 VOL = "/runpod-volume"
 LOCAL_DIR = os.path.join(VOL, "models", "FLUX.1-schnell")
 PATTERNS = ['transformer/*','text_encoder/*','text_encoder_2/*','vae/*','scheduler/*','tokenizer/*','tokenizer_2/*','*.json','*.txt']
@@ -15,8 +16,7 @@ def ensure_on_volume():
         return LOCAL_DIR
     os.makedirs(LOCAL_DIR, exist_ok=True)
     snapshot_download(MODEL_ID, local_dir=LOCAL_DIR, token=HF_TOKEN, allow_patterns=PATTERNS)
-    with open(done, "w") as f:
-        f.write("ok")
+    open(os.path.join(LOCAL_DIR, ".complete"), "w").write("ok")
     return LOCAL_DIR
 
 def load():
@@ -32,12 +32,27 @@ def load():
     return PIPE
 
 def lora_path(user, name):
-    # LoRA лежит на томе: /runpod-volume/loras/{user}/{name}/{name}.safetensors
-    p = os.path.join(VOL, "loras", user, name, name + ".safetensors")
-    if os.path.exists(p):
-        return p
-    alt = os.path.join(VOL, "loras", user, name + ".safetensors")
-    return alt if os.path.exists(alt) else None
+    # 1) локально на томе (где тренировалось)
+    for p in (os.path.join(VOL, "loras", user, name, name + ".safetensors"),
+              os.path.join(VOL, "loras", user, name + ".safetensors")):
+        if os.path.exists(p):
+            return p
+    # 2) кэш прошлой загрузки из хранилища
+    cache_root = os.path.join(VOL, "loras", "_cache") if os.path.isdir(VOL) else os.path.join("/tmp", "lora_cache")
+    cp = os.path.join(cache_root, user, name + ".safetensors")
+    if os.path.exists(cp) and os.path.getsize(cp) > 1000:
+        return cp
+    # 3) скачать из центрального хранилища приложения
+    if APP_BASE_URL:
+        try:
+            os.makedirs(os.path.dirname(cp), exist_ok=True)
+            url = "%s/api/lora/file?user=%s&name=%s" % (APP_BASE_URL, user, name)
+            urllib.request.urlretrieve(url, cp)
+            if os.path.exists(cp) and os.path.getsize(cp) > 1000:
+                return cp
+        except Exception:
+            pass
+    return None
 
 def handler(event):
     try:
@@ -47,8 +62,10 @@ def handler(event):
             root = os.path.join(VOL, "loras")
             if os.path.isdir(root):
                 for u in os.listdir(root):
-                    loras[u] = sorted(os.listdir(os.path.join(root, u)))
-            return {"vol": os.path.isdir(VOL), "model_complete": os.path.exists(os.path.join(LOCAL_DIR, ".complete")), "loras": loras}
+                    try: loras[u] = sorted(os.listdir(os.path.join(root, u)))
+                    except Exception: pass
+            return {"vol": os.path.isdir(VOL), "model_complete": os.path.exists(os.path.join(LOCAL_DIR, ".complete")),
+                    "app": bool(APP_BASE_URL), "loras": loras}
         prompt = (inp.get("prompt") or "a photo").strip()
         w = int(inp.get("width", 1024)); h = int(inp.get("height", 1024))
         steps = int(inp.get("num_inference_steps", 4))
@@ -73,10 +90,8 @@ def handler(event):
                        max_sequence_length=256, width=w, height=h, generator=gen).images[0]
         finally:
             if applied:
-                try:
-                    pipe.unload_lora_weights()
-                except Exception:
-                    pass
+                try: pipe.unload_lora_weights()
+                except Exception: pass
         buf = io.BytesIO(); img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
         return {"image": "data:image/png;base64," + b64, "resolution": "%dx%d" % (w, h), "lora": bool(applied)}
