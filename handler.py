@@ -5,7 +5,7 @@ VOL = "/runpod-volume"
 SCHNELL_PATH = os.path.join(VOL, "models", "FLUX.1-schnell")
 ADAPTER = "ostris/FLUX.1-schnell-training-adapter"
 
-def build_config(name, trigger, ds_dir, out_dir, steps, sample_prompts):
+def build_config(name, trigger, ds_dir, out_dir, steps, sample_prompts, quantize=False):
     return {
         "job": "extension",
         "config": {
@@ -27,7 +27,7 @@ def build_config(name, trigger, ds_dir, out_dir, steps, sample_prompts):
                           "optimizer": "adamw8bit", "lr": 1e-4, "skip_first_sample": True,
                           "ema_config": {"use_ema": True, "ema_decay": 0.99}, "dtype": "bf16"},
                 "model": {"name_or_path": SCHNELL_PATH, "assistant_lora_path": ADAPTER,
-                          "is_flux": True, "quantize": True},
+                          "is_flux": True, "quantize": quantize},
                 "sample": {"sampler": "flowmatch", "sample_every": steps,
                            "sample_start_step": 0, "width": 1024, "height": 1024,
                            "prompts": sample_prompts, "neg": "", "seed": 42, "walk_seed": True,
@@ -64,7 +64,7 @@ def handler(event):
             "photo of %s person, professional headshot, studio lighting" % trigger,
             "photo of %s person as an astronaut, cinematic" % trigger,
         ]
-        cfg = build_config(name, trigger, ds_dir, out_dir, steps, prompts)
+        cfg = build_config(name, trigger, ds_dir, out_dir, steps, prompts, bool(inp.get("quantize", False)))
         cfg_path = os.path.join(tempfile.mkdtemp(), "cfg.yaml")
         with open(cfg_path, "w") as f:
             yaml.safe_dump(cfg, f, sort_keys=False)
