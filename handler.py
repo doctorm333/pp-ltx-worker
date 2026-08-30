@@ -1,4 +1,4 @@
-import base64, io, os, traceback, urllib.request, torch, runpod
+import base64, io, os, ssl, shutil, traceback, urllib.request, torch, runpod
 from diffusers import FluxPipeline
 from huggingface_hub import snapshot_download
 
@@ -42,16 +42,19 @@ def lora_path(user, name):
     cp = os.path.join(cache_root, user, name + ".safetensors")
     if os.path.exists(cp) and os.path.getsize(cp) > 1000:
         return cp
-    # 3) скачать из центрального хранилища приложения
+    # 3) скачать из центрального хранилища приложения (устойчиво: UA + fallback unverified SSL)
     if APP_BASE_URL:
-        try:
-            os.makedirs(os.path.dirname(cp), exist_ok=True)
-            url = "%s/api/lora/file?user=%s&name=%s" % (APP_BASE_URL, user, name)
-            urllib.request.urlretrieve(url, cp)
-            if os.path.exists(cp) and os.path.getsize(cp) > 1000:
-                return cp
-        except Exception:
-            pass
+        os.makedirs(os.path.dirname(cp), exist_ok=True)
+        url = "%s/api/lora/file?user=%s&name=%s" % (APP_BASE_URL, user, name)
+        req = urllib.request.Request(url, headers={"User-Agent": "pp-flux/1.0"})
+        for ctx in (ssl.create_default_context(), ssl._create_unverified_context()):
+            try:
+                with urllib.request.urlopen(req, timeout=180, context=ctx) as r, open(cp, "wb") as f:
+                    shutil.copyfileobj(r, f)
+                if os.path.exists(cp) and os.path.getsize(cp) > 1000:
+                    return cp
+            except Exception as e:
+                lora_path.last_err = repr(e)[:200]
     return None
 
 def handler(event):
@@ -77,7 +80,7 @@ def handler(event):
         if lora_user and lora_name:
             lp = lora_path(lora_user, lora_name)
             if not lp:
-                return {"error": "lora not found: %s/%s" % (lora_user, lora_name)}
+                return {"error": "lora not found: %s/%s (dl_err=%s)" % (lora_user, lora_name, getattr(lora_path, "last_err", None))}
             pipe.load_lora_weights(lp, adapter_name="user")
             try:
                 pipe.set_adapters(["user"], adapter_weights=[lora_scale])
