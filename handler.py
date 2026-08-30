@@ -1,13 +1,27 @@
 import base64, io, os, traceback, torch, runpod
 from diffusers import ZImagePipeline
+from huggingface_hub import snapshot_download
 
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
+VOL = "/runpod-volume"
+LOCAL_DIR = os.path.join(VOL, "models", "Z-Image-Turbo")
+PATTERNS = ['transformer/*','text_encoder/*','vae/*','scheduler/*','tokenizer/*','*.json','*.txt']
 PIPE = None
+
+def ensure_on_volume():
+    done = os.path.join(LOCAL_DIR, ".complete")
+    if os.path.exists(done):
+        return LOCAL_DIR
+    os.makedirs(LOCAL_DIR, exist_ok=True)
+    snapshot_download(MODEL_ID, local_dir=LOCAL_DIR, allow_patterns=PATTERNS)
+    open(os.path.join(LOCAL_DIR, ".complete"), "w").write("ok")
+    return LOCAL_DIR
 
 def load():
     global PIPE
     if PIPE is None:
-        PIPE = ZImagePipeline.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16)
+        src = ensure_on_volume() if os.path.isdir(VOL) else MODEL_ID
+        PIPE = ZImagePipeline.from_pretrained(src, torch_dtype=torch.bfloat16)
         PIPE.enable_model_cpu_offload()
         try:
             PIPE.vae.enable_tiling()
@@ -18,6 +32,8 @@ def load():
 def handler(event):
     try:
         inp = event.get("input", {}) or {}
+        if inp.get("debug"):
+            return {"vol": os.path.isdir(VOL), "model_complete": os.path.exists(os.path.join(LOCAL_DIR, ".complete"))}
         prompt = (inp.get("prompt") or "a photo").strip()
         w = int(inp.get("width", 1024)); h = int(inp.get("height", 1024))
         steps = int(inp.get("num_inference_steps", 9))
