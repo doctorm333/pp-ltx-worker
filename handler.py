@@ -5,7 +5,7 @@ VOL = "/runpod-volume"
 SCHNELL_PATH = os.path.join(VOL, "models", "FLUX.1-schnell")
 ADAPTER = "ostris/FLUX.1-schnell-training-adapter"
 
-def build_config(name, trigger, ds_dir, out_dir, steps, sample_prompts, quantize=False):
+def build_config(name, trigger, ds_dir, out_dir, steps, sample_prompts, quantize=True):
     return {
         "job": "extension",
         "config": {
@@ -64,7 +64,7 @@ def handler(event):
             "photo of %s person, professional headshot, studio lighting" % trigger,
             "photo of %s person as an astronaut, cinematic" % trigger,
         ]
-        cfg = build_config(name, trigger, ds_dir, out_dir, steps, prompts, bool(inp.get("quantize", False)))
+        cfg = build_config(name, trigger, ds_dir, out_dir, steps, prompts, bool(inp.get("quantize", True)))
         cfg_path = os.path.join(tempfile.mkdtemp(), "cfg.yaml")
         with open(cfg_path, "w") as f:
             yaml.safe_dump(cfg, f, sort_keys=False)
